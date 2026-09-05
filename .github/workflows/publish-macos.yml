@@ -1,0 +1,83 @@
+name: Prepare macOS draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful fresh build run in miz77/mozkey
+        required: true
+        type: string
+      distribution_version:
+        description: Distribution version (YYYY.MM.DD.N)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-draft-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'miz77/mozkey' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate inputs and download verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.source_run_id }}
+          VERSION: ${{ inputs.distribution_version }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          assert re.fullmatch(r'[1-9][0-9]*', os.environ['RUN_ID'])
+          assert re.fullmatch(r'20[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*', os.environ['VERSION'])
+          PY
+          python3 tools/packaging/fetch_macos_artifacts.py --run-id "$RUN_ID" --output "$RUNNER_TEMP/run-artifacts"
+      - name: Test, inspect and prepare release
+        env:
+          VERSION: ${{ inputs.distribution_version }}
+        run: |
+          python3 -m unittest discover -s tools/packaging -p 'test_*.py'
+          python3 tools/packaging/prepare_macos_release.py --artifacts "$RUNNER_TEMP/run-artifacts" --version "$VERSION" --output "$RUNNER_TEMP/release"
+          python3 tools/packaging/create_source_supplement.py --release-dir "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: verified-release
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 7
+  draft:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: verified-release
+          path: release
+      - name: Create draft without executing artifact code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.distribution_version }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS.txt
+          SOURCE_SHA="$(jq -r .build_commit provenance.json)"
+          # Existing tags/assets are never replaced. gh fails if the release exists.
+          gh release create "macos-v$VERSION" ./*.zip SHA256SUMS.txt provenance.json \
+            --repo miz77/mozkey --target "$SOURCE_SHA" --draft --prerelease \
+            --title "MozKey macOS $VERSION" \
+            --notes 'Personal unsigned macOS build. See bundled README, provenance and third-party notices. GUI installation/upgrade/uninstall and dictionary redistribution review remain unverified. Draft only.'
