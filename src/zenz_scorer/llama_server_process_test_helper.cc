@@ -94,7 +94,6 @@ bool ParseOptions(int argc, char** argv, Options* options) {
   struct stat model_status = {};
   return options->host == "127.0.0.1" && options->port > 0 &&
          options->context_size >= 64 && options->threads > 0 &&
-         options->cache_ram_mib > 0 &&
          options->api_key.size() == 64 &&
          ::stat(options->model_path.c_str(), &model_status) == 0 &&
          S_ISREG(model_status.st_mode);
