@@ -320,6 +320,8 @@ std::vector<std::string> BuildArguments(
   arguments.push_back(std::to_string(options.context_size));
   arguments.push_back("-t");
   arguments.push_back(std::to_string(options.threads));
+  arguments.push_back("--cache-ram");
+  arguments.push_back("128");  // MiB単位
   arguments.push_back("--host");
   arguments.push_back("127.0.0.1");
   arguments.push_back("--port");
