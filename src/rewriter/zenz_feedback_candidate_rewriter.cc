@@ -16,6 +16,8 @@
 #include "protocol/config.pb.h"
 #include "request/conversion_request.h"
 #include "session/zenz_feedback_store.h"
+#include "session/zenz_orthography_policy.h"
+#include "session/zenz_output_validator.h"
 
 namespace mozc {
 namespace {
@@ -256,15 +258,24 @@ bool ZenzFeedbackCandidateRewriter::Rewrite(
     return false;
   }
 
+  const session::ZenzOrthographyPolicy orthography_policy;
   for (const session::ZenzFeedbackCandidate& feedback_candidate :
        ranked_candidates) {
-    const absl::string_view zenz_value = feedback_candidate.value;
+    const std::string zenz_value =
+        session::ZenzOutputValidator::RepairUserControlledSymbols(
+            full_key, original_top_value, feedback_candidate.value);
 
     if (!IsSafeCandidateText(full_key, zenz_value)) {
       continue;
     }
 
     if (zenz_value == original_top_value) {
+      continue;
+    }
+
+    const session::ZenzOrthographyDecision orthography_decision =
+        orthography_policy.Evaluate(original_top_value, zenz_value);
+    if (!orthography_decision.allow) {
       continue;
     }
 

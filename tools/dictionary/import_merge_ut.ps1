@@ -243,6 +243,12 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 $MergeDir = Join-Path $MergeRepo "src\merge"
 
+Write-Host "Preparing authenticated GitHub API lookup for CI..."
+& python3 (Join-Path $PSScriptRoot "patch_merge_ut_api_auth.py") (Join-Path $MergeDir "merge_dictionaries.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "merge-ut GitHub API authentication patch failed."
+}
+
 Write-Host "Running make.sh..."
 Push-Location $MergeDir
 try {

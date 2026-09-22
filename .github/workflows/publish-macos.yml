@@ -11,6 +11,10 @@ on:
         description: Distribution version (YYYY.MM.DD.N)
         required: true
         type: string
+      upstream_commit:
+        description: Full SHA of the adopted koyasi777/mozkey commit
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -47,9 +51,10 @@ jobs:
       - name: Test, inspect and prepare release
         env:
           VERSION: ${{ inputs.distribution_version }}
+          UPSTREAM_COMMIT: ${{ inputs.upstream_commit }}
         run: |
           python3 -m unittest discover -s tools/packaging -p 'test_*.py'
-          python3 tools/packaging/prepare_macos_release.py --artifacts "$RUNNER_TEMP/run-artifacts" --version "$VERSION" --output "$RUNNER_TEMP/release"
+          python3 tools/packaging/prepare_macos_release.py --artifacts "$RUNNER_TEMP/run-artifacts" --version "$VERSION" --upstream-commit "$UPSTREAM_COMMIT" --output "$RUNNER_TEMP/release"
           python3 tools/packaging/create_source_supplement.py --release-dir "$RUNNER_TEMP/release"
       - uses: actions/upload-artifact@v6
         with:
@@ -80,4 +85,4 @@ jobs:
           gh release create "macos-v$VERSION" ./*.zip SHA256SUMS.txt provenance.json \
             --repo miz77/mozkey --target "$SOURCE_SHA" --draft --prerelease \
             --title "MozKey macOS $VERSION" \
-            --notes 'Personal unsigned macOS build. See bundled README, provenance and third-party notices. GUI installation/upgrade/uninstall and dictionary redistribution review remain unverified. Draft only.'
+            --notes 'Personal unsigned macOS build. See bundled README, provenance and third-party notices. This build passed the recorded Apple Silicon and native Intel package checks. Manual input and upgrade validation for this build must be recorded separately. Draft only.'

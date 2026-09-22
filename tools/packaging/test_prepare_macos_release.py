@@ -1,4 +1,5 @@
 import copy
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,42 @@ import zipfile
 
 import prepare_macos_release as release
 from fetch_macos_artifacts import extract_safe
+
+
+class SourceProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.source = Path(self.tmp.name)
+        self.git("init", "-q")
+        self.git("config", "user.name", "Release Test")
+        self.git("config", "user.email", "release-test@example.invalid")
+        self.git("commit", "-q", "--allow-empty", "-m", "upstream")
+        self.upstream = self.git("rev-parse", "HEAD")
+        self.git("commit", "-q", "--allow-empty", "-m", "fork build")
+        self.build = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "--detach", self.upstream)
+        self.git("commit", "-q", "--allow-empty", "-m", "not adopted")
+        self.unmerged = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.source), *args], text=True).strip()
+
+    def test_records_upstream_separately_from_fork_build(self):
+        data = release.source_provenance(self.source, self.build, self.upstream)
+        self.assertEqual(data["upstream_commit"], self.upstream)
+        self.assertEqual(data["build_commit"], self.build)
+        self.assertNotEqual(data["upstream_commit"], data["build_commit"])
+
+    def test_rejects_unmerged_or_missing_commit(self):
+        for commit in (self.unmerged, "0" * 40):
+            with self.subTest(commit=commit), self.assertRaises(ValueError):
+                release.source_provenance(self.source, self.build, commit)
+
+    def test_rejects_abbreviated_or_symbolic_revision(self):
+        for commit in (self.upstream[:7], "HEAD", "--all"):
+            with self.subTest(commit=commit), self.assertRaises(ValueError):
+                release.source_provenance(self.source, self.build, commit)
 
 
 class ReleaseTests(unittest.TestCase):
