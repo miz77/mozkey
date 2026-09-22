@@ -13,6 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test_packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test personal release metadata and archive validation
+        run: python3 -m unittest discover -s tools/packaging -p 'test_*.py'
+
   prepare_daily_dictionary:
     # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
     runs-on: macos-15

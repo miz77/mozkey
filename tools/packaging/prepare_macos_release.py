@@ -75,6 +75,16 @@ def command(*args, check=True):
     return r.stdout
 
 
+def source_provenance(source, build_commit, upstream_commit):
+    require(re.fullmatch(r"[0-9a-f]{40}", upstream_commit), "Use a full upstream commit SHA")
+    result = subprocess.run(
+        ["git", "-C", str(source), "merge-base", "--is-ancestor", upstream_commit, build_commit],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    require(result.returncode == 0, "Upstream commit is not an ancestor of the build source")
+    return {"upstream_repository": "koyasi777/mozkey", "upstream_commit": upstream_commit,
+            "build_repository": REPOSITORY, "build_commit": build_commit}
+
+
 def inspect_package(pkg, expanded):
     command("pkgutil", "--expand-full", str(pkg), str(expanded))
     infos = list(expanded.glob("*.pkg/PackageInfo"))
@@ -125,6 +135,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--upstream-commit", required=True, help="Full SHA of the adopted koyasi777/mozkey commit")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     require(re.fullmatch(r"20\d{2}\.\d{2}\.\d{2}\.[1-9]\d*", args.version), "Invalid distribution version")
@@ -132,6 +143,7 @@ def main():
     metadata = args.artifacts / "metadata"
     run, jobs, artifacts = [json.loads((metadata / (n + ".json")).read_text()) for n in ("run", "jobs", "artifacts")]
     selected = validate_metadata(run, jobs, artifacts)
+    sources = source_provenance(source, run["head_sha"], args.upstream_commit)
     arm, intel = args.artifacts / ARM, args.artifacts / INTEL
     c = contract(arm / "ARTIFACT-CONTRACT.txt")
     require(c == contract(intel / "ARTIFACT-CONTRACT.txt"), "ARM/Intel contract mismatch")
@@ -167,7 +179,7 @@ def main():
         shutil.copy2(source / "docs/macos-distribution.md", stage / "README-macos.txt")
         shutil.copy2(source / "docs/macos-third-party-notices.md", stage / "THIRD_PARTY_NOTICES.md")
         (stage / "audit/package-inspection.json").write_text(json.dumps(audit, indent=2, ensure_ascii=False) + "\n")
-        provenance = {"upstream_repository": "koyasi777/mozkey", "upstream_commit": run["head_sha"], "build_repository": REPOSITORY, "build_commit": run["head_sha"], "build_workflow": WORKFLOW, "build_run_id": run["id"], "build_run_attempt": run["run_attempt"], "artifacts": selected, "distribution_version": args.version, "package_filename": PACKAGE, "package_sha256": c["package_sha256"], "build_contract_sha256": c["build_contract_sha256"], "dictionary_profile": "daily", "dictionary_input_revisions": None, "dictionary_note": "Dynamic input revisions/hashes were not retained by this upstream workflow; do not infer them from current upstream HEAD.", "runtime_contract": build, "package_inspection": "audit/package-inspection.json", "gui_test": "Not performed", "licenses_review": "See THIRD_PARTY_NOTICES.md; dictionary redistribution review remains open."}
+        provenance = {**sources, "build_workflow": WORKFLOW, "build_run_id": run["id"], "build_run_attempt": run["run_attempt"], "artifacts": selected, "distribution_version": args.version, "package_filename": PACKAGE, "package_sha256": c["package_sha256"], "build_contract_sha256": c["build_contract_sha256"], "dictionary_profile": "daily", "dictionary_input_revisions": None, "dictionary_note": "Dynamic input revisions/hashes were not retained by this upstream workflow; do not infer them from current upstream HEAD.", "runtime_contract": build, "package_inspection": "audit/package-inspection.json", "gui_test": "Not performed for this build by the packaging script; see release notes for manual validation.", "licenses_review": "See THIRD_PARTY_NOTICES.md; dictionary redistribution review remains open."}
         encoded = json.dumps(provenance, indent=2, ensure_ascii=False) + "\n"
         (stage / "provenance.json").write_text(encoded)
         filename = "MozKey-macOS-Universal-" + args.version + ".zip"
