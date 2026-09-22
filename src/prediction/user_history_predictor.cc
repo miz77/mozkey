@@ -83,6 +83,7 @@ namespace mozc::prediction {
 namespace {
 
 using ::mozc::composer::TypeCorrectedQuery;
+using ::mozc::converter::Attribute;
 
 // Finds suffix matches of history_segments from the most recent 500 histories
 // in LRU.
@@ -178,16 +179,21 @@ bool StartsWithValidLetter(absl::string_view value) {
          type == Util::KATAKANA || type == Util::ALPHABET;
 }
 
+// Returns true if the preceding converter history is a number.
+bool IsPrecedingNumber(const ConversionRequest& request) {
+  return Util::GetScriptType(request.converter_history_value(1)) ==
+         Util::NUMBER;
+}
+
 // Returns candidate description.
 // If candidate is spelling correction, typing correction
 // or auto partial suggestion,
 // don't use the description, since "did you mean" like description must be
 // provided at an appropriate timing and context.
 absl::string_view GetDescription(const Result& result) {
-  if (result.candidate_attributes &
-      (converter::Attribute::SPELLING_CORRECTION |
-       converter::Attribute::TYPING_CORRECTION |
-       converter::Attribute::AUTO_PARTIAL_SUGGESTION)) {
+  if (result.attributes &
+      (Attribute::SPELLING_CORRECTION | Attribute::TYPING_CORRECTION |
+       Attribute::AUTO_PARTIAL_SUGGESTION)) {
     return "";
   }
   return result.description;
@@ -607,11 +613,19 @@ std::optional<int> UserHistoryPredictor::GetBigramEntryLruOrder(
   return std::distance(next_fps.begin(), it);
 }
 
-// Returns true if prev_entry has a next_fp link to entry
+// Returns true if prev_entry has a next_fp link to entry,
+// or entry was learned after a number and the current context also ends
+// with a number.
 // static
-bool UserHistoryPredictor::HasBigramEntry(const Entry& entry,
-                                          const Entry& prev_entry) {
-  return GetBigramEntryLruOrder(entry, prev_entry).has_value();
+bool UserHistoryPredictor::HasBigramEntry(
+    const ConversionRequest& request, const Entry& entry,
+    const Entry* absl_nullable prev_entry) {
+  if (prev_entry != nullptr &&
+      GetBigramEntryLruOrder(entry, *prev_entry).has_value()) {
+    return true;
+  }
+  return (entry.entry_flags() & ENTRY_FLAG_LEFT_NUMBER) &&
+         IsPrecedingNumber(request);
 }
 
 // static
@@ -791,6 +805,10 @@ UserHistoryPredictor::Entry* absl_nonnull UserHistoryPredictor::AddEntry(
   Entry* new_entry = entry_queue.NewEntry();
   DCHECK(new_entry);
   *new_entry = entry;
+  if (new_entry->inner_segment_boundary_size() == 0) {
+    new_entry->set_attributes(new_entry->attributes() |
+                              Attribute::EMPTY_INNER_SEGMENT_BOUNDARY);
+  }
   return new_entry;
 }
 
@@ -799,11 +817,7 @@ UserHistoryPredictor::AddEntryWithNewKeyValue(
     const ConversionRequest& request, std::string key, std::string value,
     converter::InnerSegmentBoundarySpan inner_segment_boundary, Entry entry,
     EntryPriorityQueue& entry_queue) const {
-  // We add an entry even if it was marked as removed so that it can be used to
-  // generate prediction by entry chaining. The deleted entry itself is never
-  // shown in the final prediction result as it is filtered finally.
-  Entry* new_entry = entry_queue.NewEntry();
-  *new_entry = std::move(entry);
+  Entry* new_entry = AddEntry(entry, entry_queue);
   new_entry->set_key(std::move(key));
   new_entry->set_value(std::move(value));
   MaybePopulateInnerSegmentBoundary(request, inner_segment_boundary,
@@ -980,9 +994,17 @@ bool UserHistoryPredictor::GetKeyValueForPartialMatch(
   // e.g., Adding "氏" rather than "市".
   const uint16_t first_name_id = modules_.GetPosMatcher().GetFirstNameId();
 
-  auto full_result_opt = decoder_.DecodeSuffix(request, 0, request_key);
+  // Uses PREDICTION mode to call decoder_.
+  ConversionRequest::Options options;
+  options.max_conversion_candidates_size = 1;
+  options.use_actual_converter_for_realtime_conversion = false;
+  options.request_type = ConversionRequest::PREDICTION;
+  const ConversionRequest decoder_request =
+      ConversionRequestBuilder().SetOptions(std::move(options)).Build();
+
+  auto full_result_opt = decoder_.DecodeSuffix(decoder_request, 0, request_key);
   auto suffix_result_opt =
-      decoder_.DecodeSuffix(request, first_name_id, suffix);
+      decoder_.DecodeSuffix(decoder_request, first_name_id, suffix);
 
   // Failed to decode suffix.
   if (!full_result_opt || !suffix_result_opt) {
@@ -1092,6 +1114,12 @@ bool UserHistoryPredictor::AllowLowFreqFullSentenceEntryMatch(
                .first.size() < request_key.size();
   }
 
+  // Allow right-prefix matching for entries explicitly marked as safe for
+  // partial matching, such as compound nouns and proper nouns.
+  if (mtype == MatchType::RIGHT_PREFIX_MATCH && entry.allow_partial_match()) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1160,7 +1188,7 @@ bool UserHistoryPredictor::LookupEntry(
       // zero-query-suggestion
       // if |request_key| is empty, the |prev_entry| and |entry| must
       // have bigram relation.
-      if (prev_entry != nullptr && HasBigramEntry(entry, *prev_entry)) {
+      if (HasBigramEntry(request, entry, prev_entry)) {
         result = AddEntry(entry, entry_queue);
         last_entry = &entry;
       }
@@ -1235,34 +1263,32 @@ bool UserHistoryPredictor::LookupEntry(
   // from |prev_entry| to |entry|.
   RemoveAttribute(*result, Attribute::BIGRAM_BOOST);
 
-  if (prev_entry != nullptr) {
-    if (mtype == MatchType::LEFT_EMPTY_MATCH) {
-      // When zero query suggestion, prev_entry and entry might not always typed
-      // at the same time. Instead of using the unigram timestamp of prev_entry
-      // and entry, we simply use the actual time of the bigram was generated.
-      // GetBigramEntryLruOrder returns a larger value if the connection from
-      // prev_entry to entry was made more recently.
-      // (prev_entry->last_access_time() + 10 *GetBigramEntryLruOrder()) purely
-      // prioritizes bigrams that were recently generated.
-      //
-      // Sets "prev_entry->last_access_time()" as the base time to compare
-      // the preference with the entry typed prev_entry+current_entry as one
-      // word. Suppose the case when there are two histories "東京駅"  and
-      // 東京|大学", and NWP for 東京. We want to compare the timestamp of
-      // "東京駅" and "東京大学" to decide the NWP, "駅" or "大学".
-      if (std::optional<int> order = GetBigramEntryLruOrder(entry, *prev_entry);
-          order.has_value()) {
-        constexpr uint32_t kBigramLinkAsTime = 10;
-        result->set_last_access_time(prev_entry->last_access_time() +
-                                     kBigramLinkAsTime * order.value());
-        SetAttribute(*result, Attribute::BIGRAM_BOOST);
-      }
-    } else {
-      // Sets bigram_boost flag so that this entry is boosted
-      // against LRU policy.
-      if (HasBigramEntry(entry, *prev_entry))
-        SetAttribute(*result, Attribute::BIGRAM_BOOST);
+  if (prev_entry != nullptr && mtype == MatchType::LEFT_EMPTY_MATCH) {
+    // When zero query suggestion, prev_entry and entry might not always typed
+    // at the same time. Instead of using the unigram timestamp of prev_entry
+    // and entry, we simply use the actual time of the bigram was generated.
+    // GetBigramEntryLruOrder returns a larger value if the connection from
+    // prev_entry to entry was made more recently.
+    // (prev_entry->last_access_time() + 10 *GetBigramEntryLruOrder()) purely
+    // prioritizes bigrams that were recently generated.
+    //
+    // Sets "prev_entry->last_access_time()" as the base time to compare
+    // the preference with the entry typed prev_entry+current_entry as one
+    // word. Suppose the case when there are two histories "東京駅" and
+    // "東京|大学", and NWP for 東京. We want to compare the timestamp of
+    // "東京駅" and "東京大学" to decide the NWP, "駅" or "大学".
+    if (std::optional<int> order = GetBigramEntryLruOrder(entry, *prev_entry);
+        order.has_value()) {
+      constexpr uint32_t kBigramLinkAsTime = 10;
+      result->set_last_access_time(prev_entry->last_access_time() +
+                                   kBigramLinkAsTime * order.value());
+      // Attribute::BIGRAM_BOOST is set by HasBigramEntry() below.
     }
+  }
+
+  // Sets bigram_boost flag so that this entry is boosted against LRU policy.
+  if (HasBigramEntry(request, entry, prev_entry)) {
+    SetAttribute(*result, Attribute::BIGRAM_BOOST);
   }
 
   // result with zero frequency is generated via revert operation.
@@ -1349,8 +1375,10 @@ std::vector<Result> UserHistoryPredictor::Predict(
   }
 
   ConstEntrySnapshot prev_entry = LookupPrevEntry(request);
-  if (is_empty_input && !prev_entry) {
-    MOZC_VLOG(1) << "If request_key_len is 0, prev_entry must be set";
+  const bool has_prev_context = prev_entry || IsPrecedingNumber(request);
+  if (is_empty_input && !has_prev_context) {
+    MOZC_VLOG(1) << "If request_key_len is 0, prev_entry or preceding number "
+                    "must be set";
     return {};
   }
 
@@ -1777,35 +1805,81 @@ std::vector<Result> UserHistoryPredictor::MakeResults(
     Result result;
     result.key = result_entry->key();
     result.value = result_entry->value();
-    result.candidate_attributes |=
-        converter::Attribute::USER_HISTORY_PREDICTION |
-        converter::Attribute::NO_VARIANTS_EXPANSION;
-    // Do not populate inner segment information from entry to result,
-    // as this information may introduce unexpected side-effect during the
-    // the training. Inner segment information should only be fed from
-    // the realtime decoder.
-    if (result_entry->attributes() &
-        Attribute::POPULATE_INNER_SEGMENT_BOUNDARY) {
+    result.attributes |= converter::Attribute::USER_HISTORY_PREDICTION |
+                         converter::Attribute::NO_VARIANTS_EXPANSION;
+    if ((result_entry->inner_segment_boundary_size() == 0) ||
+        (result_entry->attributes() &
+         Attribute::EMPTY_INNER_SEGMENT_BOUNDARY)) {
+      result.attributes |=
+          converter::Attribute::USER_HISTORY_EMPTY_INNER_SEGMENT_BOUNDARY;
+    }
+    // Do not populate inner segment information from entry to result for
+    // prediction, as this information may introduce unexpected side-effect
+    // during training. Inner segment information should be populated for
+    // conversion requests or when explicitly requested by
+    // POPULATE_INNER_SEGMENT_BOUNDARY (e.g. from realtime decoder).
+    if ((request.request_type() == ConversionRequest::CONVERSION) ||
+        (result_entry->attributes() &
+         Attribute::POPULATE_INNER_SEGMENT_BOUNDARY)) {
       // POPULATE_INNER_SEGMENT_BOUNDARY is set when the `result_entry` is
       // `generated` by the decoder.
       absl::c_copy(result_entry->inner_segment_boundary(),
                    std::back_inserter(result.inner_segment_boundary));
     }
     if (result_entry->attributes() & Attribute::SPELLING_CORRECTION) {
-      result.candidate_attributes |= converter::Attribute::SPELLING_CORRECTION;
+      result.attributes |= converter::Attribute::SPELLING_CORRECTION;
     }
     if (result_entry->attributes() & Attribute::WEAK_CANDIDATE) {
-      result.types |= prediction::WEAK_USER_HISTORY_PREDICTION;
+      result.attributes |= converter::Attribute::WEAK_USER_HISTORY_PREDICTION;
+    } else if (IsMixedConversionEnabled(request) && !request.key().empty() &&
+               result_entry->inner_segment_boundary_size() > 1) {
+      // b/555130585: In mobile mixed conversion, demote multi-segment prefix
+      // history candidates when input has not reached the last segment (e.g.,
+      // "きょうは" for "今日は行った", or "きょうはえきに" for
+      // "今日は駅に行った") to prevent displacing shorter single-segment
+      // candidates from the limited mobile suggestion strip.
+      //
+      // Background: Previously, this ranking behavior was not explicitly
+      // designed, but occurred as an unintended side effect of invoking
+      // UserSegmentHistoryRewriter twice:
+      // 1) First inside RealtimeDecoder::Decode when generating conversion
+      //    candidates.
+      // 2) Second in Converter::ApplyPostProcessing after Predictor merged
+      //    UserHistoryPredictor and DictionaryPredictor candidates.
+      // In the second pass, UserSegmentHistoryRewriter assigned score > 0 only
+      // to exact-match candidates (key == request.key()) and score == 0 to
+      // predictive candidates (both multi-segment prefix history and dictionary
+      // prefix completions), implicitly promoting exact-match candidates above
+      // multi-segment prefix history.
+      //
+      // TODO(taku): This WEAK_USER_HISTORY_PREDICTION tagging and
+      // desktop/mobile branching exist as a workaround to reproduce the legacy
+      // 2-pass rewriter side effect without regressions. Once the
+      // UserSegmentHistoryRewriter migration is complete, refactor and simplify
+      // the scoring/ranking pipeline so that exact-match vs. predictive
+      // candidate priority is handled cleanly without multi-bucket demotion or
+      // platform-specific workarounds.
+      const converter::InnerSegments inner_segments(
+          result_entry->key(), result_entry->value(),
+          result_entry->inner_segment_boundary());
+      const size_t prefix_before_last_segment_len =
+          inner_segments
+              .GetPrefixKeyAndValue(
+                  result_entry->inner_segment_boundary_size() - 1)
+              .first.size();
+      if (request.key().size() <= prefix_before_last_segment_len) {
+        result.attributes |= converter::Attribute::WEAK_USER_HISTORY_PREDICTION;
+      }
     }
     if (result_entry->attributes() & Attribute::BIGRAM_BOOST) {
-      result.types |= prediction::BIGRAM;
+      result.attributes |= converter::Attribute::BIGRAM;
     }
 
     absl::string_view description = result_entry->description();
     // If we have stored description, set it exactly.
     if (!description.empty()) {
       result.description = description;
-      result.candidate_attributes |= converter::Attribute::NO_EXTRA_DESCRIPTION;
+      result.attributes |= converter::Attribute::NO_EXTRA_DESCRIPTION;
     }
 
     MaybeRewritePrefixSpace(request, result);
@@ -1874,7 +1948,7 @@ void UserHistoryPredictor::Insert(
     converter::InnerSegmentBoundarySpan inner_segment_boundary,
     absl::Span<const uint64_t> next_fps, bool allow_partial_match,
     uint64_t last_access_time,
-    UserHistoryPredictor::RevertEntries& revert_entries) {
+    UserHistoryPredictor::RevertEntries& revert_entries, uint32_t entry_flags) {
   // b/279560433: Preprocess key value
   // (key|value)_begin don't change after StripTrailingAsciiWhitespace.
   key = absl::StripTrailingAsciiWhitespace(key);
@@ -1935,6 +2009,9 @@ void UserHistoryPredictor::Insert(
   entry->set_value(value);
   entry->set_removed(false);
   entry->clear_attributes();
+  if (entry_flags != ENTRY_FLAG_NONE) {
+    entry->set_entry_flags(entry->entry_flags() | entry_flags);
+  }
 
   if (allow_partial_match) entry->set_allow_partial_match(true);
 
@@ -2018,8 +2095,8 @@ void UserHistoryPredictor::Finish(const ConversionRequest& request,
 
   last_committed_entries_.store(nullptr);
 
-  if (results.empty() || results.front().candidate_attributes &
-                             converter::Attribute::NO_SUGGEST_LEARNING) {
+  if (results.empty() || (results.front().attributes &
+                          converter::Attribute::NO_SUGGEST_LEARNING)) {
     MOZC_VLOG(2) << "NO_SUGGEST_LEARNING";
     return;
   }
@@ -2130,7 +2207,8 @@ UserHistoryPredictor::MakeLearningSegments(
       make_history_learning_segments(request.history_result());
   learning_segments.conversion_segments = make_learning_segments(result);
   learning_segments.inner_segment_boundary = result.inner_segment_boundary;
-  learning_segments.allow_partial_match = IsProperNoun(request, result);
+  learning_segments.allow_partial_match =
+      ShouldAllowPartialMatch(request, result, learning_segments);
 
   return learning_segments;
 }
@@ -2239,12 +2317,16 @@ void UserHistoryPredictor::InsertHistoryForConversionSegments(
     Insert(request, 0, 0, learning_segments.conversion_segments_key,
            learning_segments.conversion_segments_value, "",
            learning_segments.inner_segment_boundary, {},
-           false, /* allow_partial_match */
+           learning_segments.allow_partial_match, /* allow_partial_match */
            last_access_time, revert_entries);
   }
 
   absl::flat_hash_set<std::vector<uint64_t>> seen;
   bool this_was_seen = false;
+  absl::string_view prev_value =
+      learning_segments.history_segments.empty()
+          ? absl::string_view()
+          : learning_segments.history_segments.back().value;
   for (size_t i = 0; i < learning_segments.conversion_segments.size(); ++i) {
     const SegmentForLearning& segment =
         learning_segments.conversion_segments[i];
@@ -2276,6 +2358,11 @@ void UserHistoryPredictor::InsertHistoryForConversionSegments(
     const bool has_content_kv = segment.content_key != segment.key &&
                                 segment.content_value != segment.value;
 
+    const uint32_t entry_flags =
+        (Util::GetScriptType(prev_value) == Util::NUMBER)
+            ? ENTRY_FLAG_LEFT_NUMBER
+            : ENTRY_FLAG_NONE;
+
     converter::InnerSegmentBoundary inner_segment_boundary;
     if (has_content_kv) {
       const bool allow_partial_match =
@@ -2286,7 +2373,8 @@ void UserHistoryPredictor::InsertHistoryForConversionSegments(
           segment.key, segment.value);
       Insert(request, segment.key_begin, segment.value_begin,
              segment.content_key, segment.content_value, segment.description,
-             {}, {}, allow_partial_match, last_access_time, revert_entries);
+             {}, {}, allow_partial_match, last_access_time, revert_entries,
+             entry_flags);
     }
 
     const bool allow_partial_match =
@@ -2294,7 +2382,28 @@ void UserHistoryPredictor::InsertHistoryForConversionSegments(
     Insert(request, segment.key_begin, segment.value_begin, segment.key,
            segment.value, segment.description, inner_segment_boundary,
            next_fps_to_set, allow_partial_match, last_access_time,
-           revert_entries);
+           revert_entries, entry_flags);
+
+    // Learn the corresponding closing bracket when an opening bracket is
+    // committed. This keeps the new UserHistoryPredictor path at parity with
+    // the legacy UserSegmentHistoryRewriter behavior.
+    absl::string_view close_bracket_key;
+    absl::string_view close_bracket_value;
+    if (Util::IsOpenBracket(segment.key, &close_bracket_key) &&
+        Util::IsOpenBracket(segment.value, &close_bracket_value)) {
+      Insert(request, 0, 0, close_bracket_key, close_bracket_value,
+             segment.description, {}, {}, /*allow_partial_match=*/false,
+             last_access_time, revert_entries);
+    } else if (has_content_kv &&
+               Util::IsOpenBracket(segment.content_key, &close_bracket_key) &&
+               Util::IsOpenBracket(segment.content_value,
+                                   &close_bracket_value)) {
+      Insert(request, 0, 0, close_bracket_key, close_bracket_value,
+             segment.description, {}, {}, /*allow_partial_match=*/false,
+             last_access_time, revert_entries);
+    }
+
+    prev_value = segment.value;
   }
 }
 
@@ -2524,19 +2633,59 @@ bool UserHistoryPredictor::IsProperNoun(const ConversionRequest& request,
       }
       return dictionary::InlineCallback::TRAVERSE_CONTINUE;
     });
-    modules_.GetDictionary().LookupExact(request_key, request, &cb);
+    modules_.GetDictionary().LookupExact(request_key, request.options(), &cb);
     return found;
   };
 
   const Util::ScriptType stype = Util::GetScriptType(result.value);
   // Heuristically detect whether the prefix value is a proper noun.
   return (stype == Util::KATAKANA || stype == Util::NUMBER ||
-          stype == Util::ALPHABET ||                  // Unusual script type
-          result.types & prediction::SINGLE_KANJI ||  // Single kanji
-          result.types & prediction::NUMBER ||        // Number
-          pos_matcher.IsUniqueNoun(result.lid) ||     // proper noun POS
+          stype == Util::ALPHABET ||  // Unusual script type
+          // Single kanji
+          result.attributes & converter::Attribute::SINGLE_KANJI ||
+          // Number
+          result.attributes & converter::Attribute::NUMBER ||
+          pos_matcher.IsUniqueNoun(result.lid) ||  // proper noun POS
           pos_matcher.IsUniqueNoun(result.rid) ||
           (stype == Util::KANJI && is_proper_noun_key_in_dic(result.key)));
+}
+
+
+bool UserHistoryPredictor::ShouldAllowPartialMatch(
+    const ConversionRequest& request, const Result& result,
+    const SegmentsForLearning& learning_segments) const {
+  if (IsProperNoun(request, result)) {
+    return true;
+  }
+
+  if (!request.request()
+           .decoder_experiment_params()
+           .user_history_enable_compound_noun_partial_match()) {
+    return false;
+  }
+
+  if (learning_segments.conversion_segments.size() <= 1) {
+    return false;
+  }
+
+  // Do not enable partial matching when any conversion segment contains a
+  // functional suffix such as a particle.
+  for (const auto& seg : learning_segments.conversion_segments) {
+    if ((!seg.content_key.empty() && seg.key != seg.content_key) ||
+        (!seg.content_value.empty() && seg.value != seg.content_value)) {
+      return false;
+    }
+  }
+
+  // The compound must end in a noun-like POS (or unspecified POS).
+  const auto& pos_matcher = modules_.GetPosMatcher();
+  if (result.rid != 0 && !pos_matcher.IsContentNoun(result.rid) &&
+      !pos_matcher.IsGeneralNoun(result.rid) &&
+      !pos_matcher.IsUniqueNoun(result.rid)) {
+    return false;
+  }
+
+  return true;
 }
 
 // Example

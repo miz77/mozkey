@@ -13,7 +13,7 @@
   <img alt="Based on Mozc" src="https://img.shields.io/badge/based%20on-Mozc-88A2DD">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-Zenz-53D4C7">
   <img alt="Release build" src="https://img.shields.io/badge/release-Windows%20MSI-178B8B">
-  <img alt="macOS status" src="https://img.shields.io/badge/macOS-Zenz%20tested-2EA44F">
+  <img alt="macOS status" src="https://img.shields.io/badge/macOS-tested-2EA44F">
   <img alt="Linux status" src="https://img.shields.io/badge/Linux-untested-lightgrey">
 </p>
 
@@ -37,7 +37,7 @@ upstream Mozc との追従性および既存インストールとの互換性を
 
 現時点で Releases から公開しているビルド済みパッケージは Windows 向けです。
 
-Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
+Windows に加え、macOS でもこの fork を実機で検証しています。macOS についても、ビルドだけでなく、実際の PKG / install / runtime / 入力・表示経路まで確認しています。
 
 Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
 
@@ -91,7 +91,8 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mo
 - サジェストウィンドウとルビ表示は、候補ウィンドウの配色に追従するか、個別のテーマ・カスタム配色を使うかを選択可能
 - Windows 版の候補ウィンドウ・用例ウィンドウ・ライブ変換中のルビ表示に使うフォントを設定画面から変更可能
 - Windows 版の候補ウィンドウ・サジェストウィンドウ・ライブ変換中のルビ表示について、主要テキストの太さを 100～900 の範囲で個別に設定可能
-- Windows 版の縦書き入力で、候補ウィンドウ・サジェスト・用例表示・ライブ変換中のルビを縦書きレイアウトとして表示し、縦書き時の候補・文節移動も視覚方向に合わせて操作可能
+- Windows / macOS 版の縦書き入力で、候補ウィンドウ・サジェスト・用例表示・ライブ変換中のルビを縦書きレイアウトとして表示し、対応するキー設定では候補・文節移動も視覚方向に合わせて操作可能
+- Windows / macOS 版では、縦書き時の連鎖候補ウィンドウを現在候補から本文の外側へ展開するよう配置し、必要に応じて反対側へフォールバック
 - ライブ変換中のルビ表示を設定画面から ON/OFF 可能
 - Windows 版で未確定文字の文字色・背景色・下線色を設定画面からカスタマイズ可能
 - Windows 版の IME 切り替えインジケータが、Windows のライト / ダークテーマに合わせて表示されるように改善
@@ -111,6 +112,9 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mo
 - Windows 版では、Zenz 補正を `mozc_server` から named pipe 経由で `mozc_zenz_scorer.exe` に依頼し、`llama-server.exe` の localhost endpoint でローカル推論
 - Zenz 補正開始までの遅延時間を設定画面から変更可能。デフォルトは 1000 ms
 - Zenz 補正開始の最小文字数を設定画面から変更可能
+- 「Zenz 補正結果が返るまで通常のライブ変換結果を表示しない」opt-in 設定を追加。待機中は直前まで安定して表示されていた Zenz 補正部分を可能な範囲で維持し、未解決のローマ字 suffix はその表示へ追従。Zenz が採用されない場合は現在の Mozc ライブ変換結果へフォールバック
+- deferred 表示中の Enter / Shift による英字入力では、裏側の Mozc baseline ではなく、その時点でユーザーに見えている presentation を確定。Enter 確定後の Undo でも同じ presentation を復元
+- Zenz 出力が確定済み左文脈の長い suffix を現在入力の先頭へ反復する context echo を検出して拒否し、通常の Mozc ライブ変換結果へフォールバック
 - Zenz 補正結果のローカル feedback learning を追加。設定画面から ON/OFF 可能
 - Zenz 補正結果と異なる値で確定した回数が指定回数に達した場合、同じ読み全体・同じ文脈クラス・同じ補正結果の Zenz 補正を自動ブロックする opt-in 設定を追加。自動ブロックは TSV に hard reject を固定保存せず、現在の ON/OFF と拒否回数しきい値から既存データを動的に再評価します。
 - 同じ読み全体・同じ文脈クラス・同じ補正結果で通常却下回数が採用回数を上回る場合は、auto-block 無効時でも Zenz feedback による優先候補・保存済み feedback による即時補正としては使わず、「却下数優勢」の中立状態として扱います。これは hard block ではなく、Zenz が新しく同じ補正を返すことや通常 Mozc 候補を削除することはありません。
@@ -128,7 +132,9 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mo
 - accepted Zenz 補正を直前の通常 Mozc ライブ変換文節へ安全に逆投影できる場合は、文節列全体を外部 multi-segment commit として Mozc history に学習。通常変換候補を再利用できる場合は candidate 構造も引き継ぎ、Zenz が実際に変更した文節だけを強い選択履歴として扱う
 - 通常 Mozc ライブ変換で現在の結果として現れているユーザー辞書由来候補や ASCII / mixed-script 表記を、Zenz live correction の採用時に保護
 - ASCII / mixed-script 表記は、読みを安全に特定できる場合に Zenz prompt 内で一時 placeholder 化し、応答後に元の表記へ復元。`もずきー -> Mozkey` のような表記が `モズキー` へ上書きされるのを避けつつ、前後の文は補正できるようにした
+- 通常 Mozc が選んだ表記を orthographic baseline として保持し、`東京 -> Tokyo`、`コンピュータ -> computer` のように Zenz だけが新しい英字表記を持ち込む場合は、文節へ安全に逆投影できる範囲で該当部分だけ通常 Mozc 表記へ戻す。`GitHub`、`iPhone`、`AI`、`C++`、`GPT-5` など、通常 Mozc がすでに選んでいる Latin / technical token は維持する
 - Zenz が `（ ）` / `( )`、`？` / `?`、`！` / `!`、`：` / `:` などの記号幅・記号スタイルを正規化して返した場合でも、元の未確定文字列または通常 Mozc ライブ変換結果でユーザーが使っていた表記へ復元
+- Zenz が左文脈などから `！` / `!`、`？` / `?`、`。`、`…`、`〜` などの文末・表現記号を、現在の未確定文字列または通常 Mozc ライブ変換結果の末尾にある数を超えて追加した場合は、余分な末尾記号だけを抑制し、漢字・語彙などの補正結果は保持
 - 日本語のみのユーザー辞書語は、自然な読みを Zenz prompt に残したまま、Zenz 応答後に表記の境界を検証し、余分なかな付着を安全に修復できる場合だけ採用するようにした
 - Zenz prompt に使う左文脈は sanitizer を通し、URL、email、file path、token、長い数字列など sensitive-like な文脈は prompt に含めない
 - Zenz feedback は full-sequence 単位だけを保存し、raw left context や segment-local feedback は保存せず、非可逆な context class のみを保存
@@ -240,7 +246,9 @@ Windows 版では、追加のオフライン防御層として、インストー
 
 ### Zenz ライブ補正
 
-ライブ変換と Zenz ライブ補正の両方を有効にすると、まず通常の Mozc ライブ変換結果を表示し、その後でローカルの Zenz runtime に非同期で補正を依頼します。
+ライブ変換と Zenz ライブ補正の両方を有効にすると、通常は Mozc のライブ変換結果を表示したうえで、ローカルの Zenz runtime に非同期で補正を依頼します。
+
+設定画面の「Zenz 補正結果が返るまで通常のライブ変換結果を表示しない」を有効にすると、Zenz 補正を実行する入力では、新しい Mozc ライブ変換結果を応答待ちの間は先に表示しません。すでに安定して表示できている Zenz 補正部分がある場合は、その表示を可能な範囲で維持し、入力途中の未解決ローマ字 suffix はその後ろへ追従表示します。Mozc 側の再文節化だけを理由に、一度安定した Zenz 表示を不用意に細分化・巻き戻ししないように扱います。Zenz が失敗、タイムアウト、検証拒否、または Mozc と同一の結果になって採用されなかった場合は、その時点の通常 Mozc ライブ変換結果へフォールバックします。
 
 Windows 版では、Zenz request は `mozc_server` から Windows named pipe 経由で `mozc_zenz_scorer.exe` に送られます。scorer は同梱された `llama-server.exe` の localhost endpoint を呼び出し、ローカル推論を行います。この localhost 通信は固定 endpoint に依存しないようにし、内部 request も誤接続を避けるための保護を加えています。
 
@@ -248,11 +256,17 @@ Zenz に渡す surrounding context は、通常 Mozc の generic context とは�
 
 Zenz 補正は設定可能なデバウンス時間の後に実行されます。デフォルトは 1000 ms です。また、Zenz 補正を開始する最小文字数も設定画面から変更できます。Zenz 結果が返る前に入力内容が変わった場合、古い結果は generation / key の検査により破棄されます。
 
-Zenz 出力は表示前に検証されます。空出力、短すぎる入力、Mozc 結果と同一の出力、長すぎる出力、不正な文字列、安全でない可能性のある文字列は拒否されます。拒否された場合は、通常の Mozc ライブ変換結果をそのまま表示します。
+deferred 表示で Zenz の応答を待っている間に Space を押した場合は、候補を次へ進めず、まずその時点の Mozc 通常変換結果を表示します。Enter はその瞬間に見えている presentation をそのまま確定し、Undo では同じ presentation を未確定状態として復元します。Shift による英字入力へ移る場合も、表示中の presentation を先に確定してから英字入力を開始します。Backspace では削除後の Mozc 結果を即時に反映し、そのキー操作だけで新しい Zenz 補正を直ちに走らせず、続く実テキスト入力から通常の deferred Zenz scheduling を再開します。
+
+Zenz 出力は表示前に検証されます。空出力、短すぎる入力、Mozc 結果と同一の出力、長すぎる出力、不正な文字列、安全でない可能性のある文字列は拒否されます。さらに、確定済み左文脈の長い末尾部分を Zenz 出力の先頭へ繰り返す context echo についても、現在の読み・Mozc 結果から見て不自然に長い反復だけを検出して拒否します。短い一致や、現在の読みそのものが同じ語句の反復を要求している場合は一律には拒否しません。拒否された場合は、その時点の通常 Mozc ライブ変換結果へフォールバックします。
 
 通常 Mozc ライブ変換で現在の結果として現れているユーザー辞書由来候補や ASCII / mixed-script 表記は、Zenz 採用時に保護されます。ASCII / mixed-script 表記は、読みを安全に特定できる場合に Zenz prompt 内で一時 placeholder 化し、Zenz 応答後に元の表記へ復元します。これにより、`もずきー -> Mozkey` のような表記が `モズキー` のように上書きされることを避けつつ、対象語の前後にある文の補正は採用できるようにしています。
 
+通常 Mozc が選んだ表記は、Zenz 採用時の orthographic baseline としても扱います。Zenz だけが `東京 -> Tokyo` や `コンピュータ -> computer` のような Latin 表記を新たに導入したり、通常 Mozc が選んだ Latin / technical token を削除・変形したりした場合、文節境界へ安全に逆投影できるときは問題のある文節だけを通常 Mozc の表記へ戻し、ほかの Zenz 補正は維持します。安全に逆投影できない場合や、保存していた baseline 文節が欠落・不整合な場合は、表記上安全でない遷移を含む Zenz 結果を採用しません。一方、通常 Mozc がすでに `GitHub`、`iPhone`、`AI`、`C++`、`GPT-5`、`UTF-8`、`HTTP/2`、`Windows11` などを選んでいる場合、それらは正当な baseline として維持します。
+
 また、Zenz が括弧、疑問符、感嘆符、一部の全角 ASCII 記号 などを正規化して返した場合でも、採用前にユーザー可視の記号スタイルを復元します。これは全角化ではなく、現在の未確定文字列または通常 Mozc ライブ変換結果に現れていた表記の保存です。たとえば `（テスト）` は `（ ）` のまま、`(test)` は `( )` のまま維持します。URL、path、ASCII token 風の文脈では、ASCII 記号を不用意に全角化しないよう保守的に扱います。
+
+さらに、Zenz が左文脈の文体などを引き継いで、現在の未確定文字列や通常 Mozc ライブ変換結果にない文末・表現記号を末尾へ追加する場合があります。Mozkey は `！` / `!`、`？` / `?`、`。`、`…`、`〜` などについて、現在の未確定文字列と通常 Mozc ライブ変換結果の末尾に既にある数を上限として、超過した末尾記号だけを採用前に取り除きます。これにより、漢字・語彙などの Zenz 補正は残しつつ、文脈だけから追加された余分な末尾記号を抑制します。文中の記号はこの repair の対象にしません。
 
 日本語のみのユーザー辞書語は、自然な読みを Zenz prompt に残したまま、Zenz 応答後に表記の境界を検証します。たとえば保護対象の直後に余分なかなが付着した場合は、安全に修復できる場合だけ採用し、修復できない場合は通常の Mozc ライブ変換結果に戻します。
 
@@ -268,7 +282,7 @@ Zenz feedback learning は任意機能です。有効な場合でも、Zenz 補�
 
 Zenz feedback TSV は、完全な読み key、完全な補正 value、粗い非可逆 context class からなる full-sequence 単位に限定します。segment-local や lexical-unit の feedback は保存しません。accepted Zenz 補正は条件を満たす場合に Mozc user history へ外部変換結果として学習されますが、それは Zenz feedback store の追加 record ではなく、別の Mozc-history 経路です。さらに、accepted Zenz 補正を直前の通常 Mozc ライブ変換文節へ安全に逆投影できる場合は、逆投影後の文節列全体を外部 multi-segment commit として Mozc history に学習します。このとき、通常 Mozc 変換で同じ key/value の候補を再取得できる場合は、その candidate 構造を再利用し、通常変換確定に近い形で user history に渡します。Zenz が実際に変更した文節だけを強い選択履歴として扱い、変更されていない文節は文脈として保持します。逆投影できない場合や privacy / password gate に該当する場合は、full-sequence 学習だけに戻ります。
 
-特に Space は、Zenz 補正を単にキャンセルしてライブ変換中の入力列へ戻すキーではなく、通常変換候補へ戻る候補変更操作として扱います。Zenz 補正表示中に Space を押すと、補正前の Mozc 変換結果を通常変換状態として表示し、候補ウィンドウはまだ開きません。そのまま次の文字を入力した場合は、戻した Mozc 変換結果を確定してから新しい入力を開始します。さらに Space を押した場合は、従来どおり通常変換の候補ウィンドウを開いて次候補へ進みます。
+特に Space は、Zenz 補正を単にキャンセルしてライブ変換中の入力列へ戻すキーではなく、通常変換候補へ戻る候補変更操作として扱います。deferred 表示でまだ Zenz の応答待ちの場合は、最初の Space でその時点の Mozc 通常変換結果を表示しますが、候補は次へ進めません。すでに Zenz 補正が表示されている場合も、Space を押すと補正前の Mozc 変換結果を通常変換状態として表示し、候補ウィンドウはまだ開きません。そのまま次の文字を入力した場合は、戻した Mozc 変換結果を確定してから新しい入力を開始します。さらに Space を押した場合は、従来どおり通常変換の候補ウィンドウを開いて次候補へ進みます。
 
 Zenz feedback の再利用方法は、単文節と複数文節で異なります。
 
@@ -341,6 +355,8 @@ Zenz ライブ補正では、Zenzai v3/v3.2 の特殊トークン形式に沿っ
 たとえば、ローマ字テーブルで `zz -> 。`、`qq -> ？`、`md -> ・` のように設定している場合でも、出力先の記号を単打確定の対象にしていれば、`tesutozz` → `てすと。`、`tesutoqq` → `てすと？`、`tesutomd` → `てすと・` のように確定されます。
 
 どの句読点・記号を単打確定の対象にするかは、設定画面のチェックボックスで選択できます。
+
+ただし、数字直後の句点・読点系文字は、数値入力を妨げないよう単打確定の対象外として扱います。これにより、句読点・記号の単打確定を有効にしたままでも、`3.14` や `1,000` のような数値を途中で確定せずに入力できます。通常の日本語入力での句点・読点の単打確定は従来どおり動作します。
 
 ライブ変換が有効な場合、句読点・記号の単打確定では、ひらがなの未変換文字列ではなく、現在表示されているライブ変換結果を確定します。
 
@@ -466,15 +482,11 @@ Windows 版では、設定画面から候補ウィンドウ、サジェストウ
 
 IME 切り替えインジケータは Windows のライト / ダークテーマに追従し、現在の入力モードを確認しやすいように配色を切り替えます。
 
-### Windows 縦書き対応
+### 縦書き対応（Windows / macOS）
 
-Windows 版では、縦書きの入力位置を検出し、候補ウィンドウ、予測・サジェスト、用例表示、ライブ変換中のルビを縦組みに合わせて表示します。候補や用例の主要テキストには DirectWrite の縦書き描画を使用します。
+Windows / macOS 版では、縦書き入力時に候補ウィンドウ、予測・サジェスト、用例表示、ライブ変換中のルビを縦組みに合わせて表示します。横書き時の既存動作は維持します。
 
-候補ウィンドウは縦書きの入力位置に対して左側への配置を優先し、アプリケーションから渡される入力行の幅が狭い場合でも、入力文字と候補表示が近づきすぎないように配置を補正します。アプリケーション名ごとの個別分岐ではなく、入力位置の geometry に基づいて調整します。
-
-ライブ変換中のルビも縦書き composition に追従します。Word などで未確定文字列が複数の縦列へ折り返す場合は、すでに表示されている composition 列と重ならない位置へルビを配置します。
-
-縦書きの候補操作では、現在のキー設定が対応する既存コマンド割り当てに一致する場合に、視覚方向に合わせて矢印キーを解釈します。
+縦書きの候補操作では、Windows / macOS のどちらでも、縦書き状態を session 側へ伝え、現在のキー設定が対応する既存コマンド割り当てに一致する場合に、視覚方向に合わせて矢印キーを解釈します。
 
 - Suggestion では Left で候補へ移動
 - Conversion / Prediction では Left / Right で候補の前後へ移動し、Up / Down で前後の文節へ移動
@@ -482,6 +494,32 @@ Windows 版では、縦書きの入力位置を検出し、候補ウィンドウ
 - 既存の `Shift+Left` / `Shift+Right` による文節幅変更も互換操作として維持
 
 通常の横書き動作、通常 Composition 中のカーソル操作、`Ctrl+Shift` 系の操作、および対応するコマンド割り当てを持たないキー設定は従来動作を維持します。
+
+#### Windows
+
+Windows 版では、縦書きの入力位置を検出し、候補や用例の主要テキストを DirectWrite の縦書き描画で表示します。
+
+候補ウィンドウは縦書きの入力位置に対して左側への配置を優先し、アプリケーションから渡される入力行の幅が狭い場合でも、入力文字と候補表示が近づきすぎないように配置を補正します。アプリケーション名ごとの個別分岐ではなく、入力位置の geometry に基づいて調整します。
+
+縦書きの候補列は、候補ごとの文字量や説明の有無に応じた自然な幅・高さで配置します。長い候補がある場合でも、他の候補列まで一律に引き伸ばさず、それぞれの候補に必要な大きさを保ちます。選択中の候補は、文字列自体が短い場合でも候補本文領域の下端まで選択背景を伸ばし、縦書きの列として現在位置を確認しやすくしています。
+
+連鎖候補ウィンドウは、現在選択している候補を基準に、縦書き本文から見て外側となる左側への展開を優先します。候補ウィンドウや入力位置との重なり、または画面端の制約により左側へ配置できない場合は右側へフォールバックします。通常の横書き時は従来の配置を維持します。
+
+ライブ変換中のルビも縦書き composition に追従します。Word などで未確定文字列が複数の縦列へ折り返す場合は、すでに表示されている composition 列と重ならない位置へルビを配置します。
+
+#### macOS
+
+macOS 版では、IMK 側で取得した writing direction をレンダラーへ伝播し、候補・用例・ルビの主要テキストを Core Text の縦書き描画で表示します。
+
+候補／サジェストでは、Core Text が全文を確実に描画できる技術的な text frame と、画面上で実際に見せる候補列の幅を分離しています。表示幅は CJK の標準的な列幅を下限としつつ、実際のグリフ幅がそれを超える場合だけ拡張します。これにより、日本語・ASCII・半角カナなどが混在しても、必要以上に太い候補列になりにくいようにしています。
+
+縦書き時の候補／サジェストと本文との間隔は 6 pt とし、ライブ変換中のルビも実効 6 pt の間隔で配置します。横書き時の既存の間隔・配置は変更しません。
+
+用例表示（Infolist）は縦書き時に列ごとの Core Text frame を使って描画し、縦組みの表示方向に合わせて配置します。ルビ表示も、描画用 frame を確保しつつ、可視部分は CJK の標準列幅と実際のグリフ幅に基づいて過不足なく配置します。
+
+連鎖候補ウィンドウは、現在の候補位置を基準に、縦書き本文から見て外側となる左側への展開を優先します。候補ウィンドウや preedit との重なりを避けられない場合は右側へフォールバックし、同じ階層の連鎖候補同士も重ならないように配置します。
+
+これらの縦書き処理は macOS 専用の layout / writing-direction ロジックとして分離し、候補レイアウト、Infolist レイアウト、writing direction、ウィンドウ配置の単体テストを追加しています。通常の横書き経路は従来動作を維持します。
 
 ### Windows 未確定文字の表示色
 
@@ -660,7 +698,7 @@ Download / Install
 
 At the moment, prebuilt packages published from Releases are available for Windows.
 
-In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
+In addition to Windows, this fork is also tested on real macOS hardware. The macOS path is verified beyond successful builds, including actual package/install, runtime, input, and rendering workflows.
 
 Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
 
@@ -719,7 +757,8 @@ Main features added in this fork
 - Allows the suggestion window and ruby display to either follow the candidate window color theme or use their own theme/custom colors
 - Allows changing the font used for the Windows candidate window, infolist window, and live-conversion ruby display from the config dialog
 - Allows configuring the primary text weight independently from 100 to 900 for the Windows candidate window, suggestion window, and live-conversion ruby display
-- Adds Windows vertical-writing support for candidate, suggestion, infolist, and live-conversion ruby displays, with candidate and segment navigation aligned to the visual writing direction when the active keymap uses the supported command bindings
+- Adds vertical-writing layouts for candidate, suggestion, infolist, and live-conversion ruby displays on Windows and macOS, with candidate and segment navigation aligned to the visual writing direction when the active keymap uses the supported command bindings
+- On Windows and macOS, places cascading candidate windows outward from the focused vertical candidate, with fallback to the opposite side when necessary
 - Allows enabling or disabling the ruby display shown during live conversion from the config dialog
 - Allows customizing Windows preedit text color, background color, and underline color from the config dialog
 - Makes the Windows IME mode indicator follow the Windows light/dark theme
@@ -739,6 +778,9 @@ Main features added in this fork
 - On Windows, sends Zenz correction requests from `mozc_server` to `mozc_zenz_scorer.exe` through a named pipe and performs local inference through the localhost endpoint of `llama-server.exe`
 - Allows configuring the Zenz correction debounce delay from the config dialog. The default is 1000 ms
 - Allows configuring the minimum number of characters to start Zenz correction
+- Adds an opt-in `Do not show the normal live-conversion result until Zenz correction returns` mode. While waiting, Mozkey preserves the previously stable Zenz-corrected presentation when possible and appends unresolved raw-romaji suffixes to that visible presentation; if Zenz is not adopted, it falls back to the current Mozc live-conversion result
+- Commits the presentation that is actually visible to the user, rather than a hidden Mozc baseline, when Enter or Shift-based ASCII input ends a deferred presentation; Undo after Enter restores the same visible presentation
+- Detects and rejects likely context echo where Zenz repeats a long suffix of already committed left context at the beginning of the current output, then falls back to the normal Mozc live-conversion result
 - Adds optional local feedback learning for Zenz correction results
 - Adds an opt-in auto-block setting for Zenz corrections repeatedly committed as a different value. Auto-blocking does not persist irreversible hard-reject rows; it dynamically re-evaluates existing feedback data from the current ON/OFF state and rejection-count threshold.
 - Stops reusing a Zenz feedback entry as a preferred candidate or live-correction fast path when ordinary rejected observations outnumber accepted observations for the same full reading, context class, and correction value. This is a neutral reject-count-dominant state, not a hard block, so it does not delete ordinary Mozc candidates or prevent newly produced Zenz corrections by itself.
@@ -756,7 +798,9 @@ Main features added in this fork
 - When an accepted Zenz correction can be safely reverse-projected onto the previous normal Mozc live-conversion segments, learns the projected segment sequence as an external multi-segment commit. If Mozc can reproduce the same key/value candidate through normal conversion, the candidate structure is reused so user history receives evidence closer to a normal conversion commit. Only segments actually changed by Zenz are marked as strong user-selected history.
 - Protects user-dictionary candidates and ASCII / mixed-script surfaces that appear in the current normal Mozc live-conversion result before adopting Zenz live-correction output
 - For ASCII / mixed-script surfaces, temporarily replaces the reading with a placeholder in the Zenz prompt when it can be identified safely, then restores the selected surface after the response, so entries such as `もずきー -> Mozkey` are not silently overwritten as `モズキー` while surrounding text can still be corrected
+- Treats the surface selected by normal Mozc as an orthographic baseline. When Zenz alone introduces or mutates a Latin / technical spelling such as `東京 -> Tokyo` or `コンピュータ -> computer`, Mozkey restores the affected safely projectable segment to the Mozc surface; Latin / technical tokens already selected by Mozc, such as `GitHub`, `iPhone`, `AI`, `C++`, `GPT-5`, `UTF-8`, `HTTP/2`, and `Windows11`, remain valid
 - Preserves user-visible punctuation style when adopting Zenz live-correction output, so brackets and symbols such as `（ ）` / `( )`, `？` / `?`, and `！` / `!` stay in the style chosen by the current composition or Mozc live-conversion result
+- Suppresses only excess trailing sentence-final or expressive punctuation introduced by contextual Zenz output beyond what is already present at the end of the current composition or normal Mozc live-conversion result, while preserving the rest of the correction
 - For Japanese-only user-dictionary surfaces, keeps the natural reading in the Zenz prompt and validates the selected surface boundaries after the response, accepting the result only when any extra kana attachment can be repaired safely
 - Sanitizes left context before using it in Zenz prompts, and excludes sensitive-like context such as URLs, email addresses, file paths, tokens, and long digit sequences
 - Stores only full-sequence Zenz feedback with non-reversible context classes, never raw left context or segment-local feedback
@@ -818,9 +862,19 @@ The live conversion feature can be enabled or disabled from the config dialog. T
 
 ### Zenz live correction
 
-When both live conversion and Zenz live correction are enabled, this fork first
-shows the normal Mozc live conversion result and then asynchronously asks a local
+When both live conversion and Zenz live correction are enabled, this fork
+normally shows the Mozc live-conversion result and asynchronously asks a local
 Zenz runtime to refine the visible preedit.
+
+When the config option `Do not show the normal live-conversion result until
+Zenz correction returns` is enabled, inputs that are eligible for Zenz do not
+show a newly computed Mozc live-conversion result while the Zenz request is
+pending. If a stable Zenz-corrected prefix is already visible, Mozkey preserves
+that presentation when possible and appends unresolved raw-romaji suffixes to
+it. Mozc resegmentation alone does not cause a previously stable Zenz
+presentation to be split or rolled back. If Zenz fails, times out, is rejected
+by validation, or produces the same value as Mozc and is therefore not adopted,
+Mozkey falls back to the current normal Mozc live-conversion result.
 
 On Windows, the Zenz request is sent from `mozc_server` to
 `mozc_zenz_scorer.exe` through a Windows named pipe. The scorer then calls the
@@ -841,10 +895,23 @@ delay is 1000 ms. The minimum number of characters required to start Zenz
 correction can also be configured. If the current composition changes before
 the Zenz result arrives, the old result is discarded by generation/key checks.
 
+While a deferred presentation is waiting for Zenz, pressing Space first reveals
+the current normal Mozc conversion result without advancing to the next
+candidate. Enter commits exactly the presentation that is visible at that
+moment, and Undo restores that same presentation as preedit. Shift-based ASCII
+input likewise commits the visible presentation before starting ASCII input.
+Backspace immediately reflects the post-deletion Mozc result; that Backspace
+does not itself start a fresh Zenz correction, and normal deferred Zenz
+scheduling resumes with subsequent real text input.
+
 Zenz output is validated before display. Outputs that are empty, too short,
 identical to the Mozc result, too long, malformed, or likely to contain unsafe
-text are rejected. If validation fails, the normal Mozc live conversion result
-remains visible.
+text are rejected. Mozkey also rejects likely context echo in which the output
+starts by repeating an unusually long suffix of already committed left context
+relative to the current reading/Mozc result. Short overlaps are not rejected
+unconditionally, and legitimate repetition supported by the current reading is
+still allowed. If validation fails, Mozkey falls back to the current normal
+Mozc live-conversion result.
 
 User-dictionary candidates and ASCII / mixed-script surfaces that appear in the
 current normal Mozc live-conversion result are protected before Zenz output is
@@ -855,12 +922,32 @@ surface after the response. This prevents Zenz from silently overwriting the
 protected word as `モズキー` while still allowing correction of the surrounding
 sentence.
 
+The surface selected by normal Mozc is also treated as an orthographic baseline
+for Zenz adoption. If Zenz alone introduces a Latin spelling such as
+`東京 -> Tokyo` or `コンピュータ -> computer`, or removes or mutates a Latin /
+technical token already selected by Mozc, Mozkey restores only the affected
+segment when the result can be projected safely back onto the Mozc segment
+boundaries, preserving unrelated Zenz corrections. If safe projection is not
+possible, or if the saved baseline segments are missing or inconsistent, a Zenz
+result containing an unsafe orthographic transition is not adopted. Latin /
+technical tokens already selected by normal Mozc, including `GitHub`, `iPhone`,
+`AI`, `C++`, `GPT-5`, `UTF-8`, `HTTP/2`, and `Windows11`, remain valid baseline
+surfaces.
+
 Zenz output may also normalize visible punctuation style. Before adoption,
 Mozkey restores the symbol style from the current composition or normal Mozc
 live-conversion result. This is preservation rather than fullwidth
 normalization: `（test）` stays fullwidth when that was the source style, while
 `(test)` stays ASCII. ASCII-token-like contexts such as code-like words, paths,
 and URLs are handled conservatively to avoid unwanted widening.
+
+Zenz can also carry sentence-final or expressive punctuation forward from
+surrounding context even when the current composition did not request it.
+Before adoption, Mozkey limits trailing symbols such as `！` / `!`, `？` / `?`,
+`。`, `…`, and `〜` to the count already present at the end of the current
+composition or normal Mozc live-conversion result. Only the excess trailing
+symbols are removed, so semantic and orthographic corrections are preserved;
+punctuation inside the candidate is not modified by this repair.
 
 Japanese-only user-dictionary surfaces keep their natural reading in the Zenz
 prompt. After the Zenz response, Mozkey validates the selected surface
@@ -914,12 +1001,15 @@ reverse projection fails, or if the privacy / password gates reject the text,
 Mozkey falls back to full-sequence learning only.
 
 Space is treated specifically as a candidate-change operation, not as a plain
-cancel back into the live-conversion composition. When Space is pressed while a
-Zenz correction is visible, Mozkey restores the underlying Mozc conversion as an
-ordinary conversion result without opening the candidate window yet. If the user
-then types more text, the restored Mozc conversion is committed first and the
-new text starts a fresh composition. Pressing Space again follows the ordinary
-conversion path and opens the candidate window for the next candidate.
+cancel back into the live-conversion composition. If deferred presentation is
+still waiting for Zenz, the first Space reveals the current normal Mozc
+conversion result without advancing to the next candidate. When Space is pressed
+while a Zenz correction is already visible, Mozkey restores the underlying Mozc
+conversion as an ordinary conversion result without opening the candidate window
+yet. If the user then types more text, the restored Mozc conversion is committed
+first and the new text starts a fresh composition. Pressing Space again follows
+the ordinary conversion path and opens the candidate window for the next
+candidate.
 
 Zenz feedback is reused differently for single-segment and multi-segment
 conversions.
@@ -1024,6 +1114,8 @@ Examples:
 The selectable targets include periods, commas, question marks, exclamation marks, parentheses, corner brackets, and the middle dot. `「` and `」` are configured independently. The middle dot `・` is handled as an independent Japanese separator symbol.
 
 You can choose which punctuations/symbols are committed directly in the config dialog.
+
+However, period- and comma-like punctuation immediately following a number is excluded from direct commit so that numeric input can continue normally. This allows values such as `3.14` and `1,000` to be entered without being committed at the punctuation, while ordinary punctuation direct commit in Japanese text continues to work as before.
 
 When live conversion is enabled, direct-commit punctuations/symbols commit the currently displayed live conversion result instead of committing the raw kana composition.
 
@@ -1185,15 +1277,11 @@ the config dialog.
 The IME mode indicator follows the Windows light/dark theme and changes its
 colors to keep the current input mode easy to recognize.
 
-### Windows vertical writing support
+### Vertical writing support (Windows / macOS)
 
-On Windows, Mozkey detects vertical composition geometry and lays out the candidate window, prediction/suggestion display, infolist, and live-conversion ruby for vertical writing. Primary candidate and infolist text uses DirectWrite vertical text rendering.
+On Windows and macOS, Mozkey lays out the candidate window, prediction/suggestion display, infolist, and live-conversion ruby for vertical writing while preserving the existing horizontal-writing behavior.
 
-The candidate window prefers placement on the left side of a vertical composition. When an application reports a narrow input-line geometry, Mozkey adds placement clearance so that the candidate display does not sit too close to the input text. This adjustment is based on the reported composition geometry rather than application-specific name checks.
-
-The live-conversion ruby display also follows vertical composition geometry. When an uncommitted composition wraps across multiple vertical columns, such as in Word, the renderer keeps the ruby outside the already occupied composition span instead of placing it over an earlier column.
-
-For candidate navigation in vertical writing, Mozkey reinterprets arrow keys only when the active keymap uses the supported existing command bindings.
+For candidate navigation in vertical writing, both Windows and macOS pass the vertical-writing state into the session layer. When the active keymap uses the supported existing command bindings, Mozkey reinterprets arrow keys to match the visual writing direction.
 
 - In Suggestion state, Left enters the candidate list.
 - In Conversion / Prediction state, Left / Right move through candidates while Up / Down move between segments.
@@ -1201,6 +1289,32 @@ For candidate navigation in vertical writing, Mozkey reinterprets arrow keys onl
 - Existing `Shift+Left` / `Shift+Right` segment-width operations remain available for compatibility.
 
 Horizontal writing, ordinary cursor movement during Composition, `Ctrl+Shift` combinations, and keymaps that do not use the supported command bindings retain their existing behavior.
+
+#### Windows
+
+On Windows, Mozkey detects vertical composition geometry and uses DirectWrite vertical text rendering for primary candidate and infolist text.
+
+The candidate window prefers placement on the left side of a vertical composition. When an application reports a narrow input-line geometry, Mozkey adds placement clearance so that the candidate display does not sit too close to the input text. This adjustment is based on the reported composition geometry rather than application-specific name checks.
+
+In vertical mode, candidate columns keep natural per-candidate geometry based on their own text and description content. A long candidate does not force unrelated candidate columns to expand to the same size. The selection background extends through the candidate body even when the visible text is short, making the currently selected vertical column easier to identify.
+
+Cascading candidate windows are anchored to the focused candidate and prefer expanding to the left, outward from the vertical composition. If the left-side placement would collide with the candidate/preedit region or cannot fit within the working area, the renderer falls back to the right. The existing horizontal cascading placement is preserved.
+
+The live-conversion ruby display also follows vertical composition geometry. When an uncommitted composition wraps across multiple vertical columns, such as in Word, the renderer keeps the ruby outside the already occupied composition span instead of placing it over an earlier column.
+
+#### macOS
+
+On macOS, Mozkey propagates the writing direction obtained by the IMK input side into the renderer and uses Core Text vertical text rendering for primary candidate, infolist, and ruby text.
+
+For candidate and suggestion rows, the technical Core Text frame required to render the full string is kept separate from the visible candidate-column width. The visible width uses a nominal CJK column width as its floor and expands only when the actual glyph ink requires more space. This avoids unnecessarily wide columns for Japanese, ASCII, and half-width katakana while preserving enough room for genuinely wide glyphs.
+
+The vertical gap between the candidate/suggestion display and the composition text is 6 pt. The live-conversion ruby is also placed with an effective 6 pt gap. Existing horizontal-writing spacing and placement remain unchanged.
+
+The infolist uses compact per-column Core Text frames in vertical mode. The ruby display similarly keeps a sufficiently large technical text frame while sizing the visible pill from the nominal CJK column width and actual glyph ink.
+
+Cascading candidate windows are anchored to the focused candidate and prefer expanding to the left, which is outward from the vertical composition. If that placement would collide with the candidate/preedit region or run out of room, the renderer falls back to the right side. Sibling cascade windows are also kept from overlapping each other.
+
+The macOS vertical-writing implementation is separated into dedicated layout and writing-direction logic, with unit tests for candidate layout, infolist layout, writing direction, and window placement. The existing horizontal-writing path retains its previous behavior.
 
 ### Windows preedit display colors
 
