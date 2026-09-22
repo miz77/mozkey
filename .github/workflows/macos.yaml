@@ -20,7 +20,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Test personal release metadata and archive validation
-        run: python3 -m unittest discover -s tools/packaging -p 'test_*.py'
+        run: |
+          python3 -m unittest discover -s tools/packaging -p 'test_*.py'
+          python3 -m unittest discover -s tools/dictionary -p 'test_patch_merge_ut_api_auth.py'
 
   prepare_daily_dictionary:
     # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
@@ -37,6 +39,7 @@ jobs:
       - name: Prepare daily dictionary
         shell: pwsh
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
         run: |
